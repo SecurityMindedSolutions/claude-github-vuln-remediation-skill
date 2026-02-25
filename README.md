@@ -47,17 +47,17 @@ The skill stops and asks for approval at two points:
 
 ## Installation
 
-Clone the repo into your Claude Code skills directory:
+Clone the repo and symlink the skill directory:
 
 ```bash
-git clone https://github.com/SecurityMindedSolutions/claude-github-vuln-remediation-skill.git ~/.claude/skills/github-remediate-vulns
+git clone https://github.com/SecurityMindedSolutions/claude-github-vuln-remediation-skill.git ~/.claude/skills/claude-github-vuln-remediation-skill
+ln -s ~/.claude/skills/claude-github-vuln-remediation-skill/github-remediate-vulns ~/.claude/skills/github-remediate-vulns
 ```
 
-Or copy manually:
+Or copy just the skill folder:
 
 ```bash
-mkdir -p ~/.claude/skills/github-remediate-vulns
-cp -R claude-github-vuln-remediation-skill/{SKILL.md,modules,templates} ~/.claude/skills/github-remediate-vulns/
+cp -R claude-github-vuln-remediation-skill/github-remediate-vulns ~/.claude/skills/github-remediate-vulns
 ```
 
 ### Prerequisites
@@ -74,14 +74,15 @@ cp -R claude-github-vuln-remediation-skill/{SKILL.md,modules,templates} ~/.claud
 claude-github-vuln-remediation-skill/
 ├── README.md
 ├── LICENSE
-├── SKILL.md              # Orchestrator prompt (8-step workflow)
-├── modules/
-│   ├── dependabot.md     # Dependency bump remediation logic
-│   ├── code-scanning.md  # SAST finding fix patterns
-│   └── secret-scanning.md # Secret triage (report-only)
-└── templates/
-    ├── scan-report.md        # Phase 1 output template
-    └── remediation-report.md # Phase 2 output template
+└── github-remediate-vulns/   # ← symlink or copy this folder to ~/.claude/skills/
+    ├── SKILL.md              # Orchestrator prompt (8-step workflow)
+    ├── modules/
+    │   ├── dependabot.md     # Dependency bump remediation logic
+    │   ├── code-scanning.md  # SAST finding fix patterns
+    │   └── secret-scanning.md # Secret triage (report-only)
+    └── templates/
+        ├── scan-report.md        # Phase 1 output template
+        └── remediation-report.md # Phase 2 output template
 ```
 
 ## Usage
