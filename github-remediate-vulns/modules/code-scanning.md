@@ -156,6 +156,158 @@ subprocess.run(["ls", user_path], check=True)
 4. Remove `shell=True`
 5. If the command genuinely needs shell features (pipes, redirects), classify as MANUAL
 
+### `js/sql-injection`
+**Problem**: Building SQL queries with string concatenation or template literals.
+**Risk**: Attacker can inject arbitrary SQL through user-controlled values.
+
+**Fix pattern**:
+```javascript
+// BEFORE (vulnerable)
+const query = `SELECT * FROM users WHERE id = ${userId}`;
+db.query(query);
+// or: db.query("SELECT * FROM users WHERE id = " + userId);
+
+// AFTER (parameterized - pg/mysql2)
+db.query("SELECT * FROM users WHERE id = $1", [userId]);
+// or for mysql2:
+db.query("SELECT * FROM users WHERE id = ?", [userId]);
+
+// AFTER (Knex.js)
+knex("users").where("id", userId);
+
+// AFTER (Prisma - already safe by default, but raw queries need params)
+prisma.$queryRaw`SELECT * FROM users WHERE id = ${userId}`;
+```
+
+**Steps**:
+1. Read the full function containing the flagged line
+2. Identify the DB library (pg, mysql2, sqlite3, knex, sequelize, prisma)
+3. Replace string interpolation with parameterized queries using the library's syntax
+4. For `pg`: use `$1, $2` positional params
+5. For `mysql2`/`sqlite3`: use `?` positional params
+6. For ORMs with raw queries: use the ORM's parameterized raw query method
+
+### `js/path-injection`
+**Problem**: User input used in file system paths without sanitization.
+**Risk**: Attacker can traverse directories to read/write arbitrary files.
+
+**Fix pattern**:
+```javascript
+// BEFORE (vulnerable)
+const filePath = path.join(uploadDir, req.params.filename);
+fs.readFile(filePath);
+
+// AFTER (validated)
+const path = require("path");
+const safeName = path.basename(req.params.filename); // strips directory traversal
+const filePath = path.join(uploadDir, safeName);
+const resolved = path.resolve(filePath);
+if (!resolved.startsWith(path.resolve(uploadDir))) {
+  throw new Error("Path traversal detected");
+}
+fs.readFile(resolved);
+```
+
+**Steps**:
+1. Read context to find where user input enters the path construction
+2. Add `path.basename()` to strip directory components from user input
+3. Add a `path.resolve()` + `startsWith()` guard to ensure the final path stays within the intended directory
+4. If the code needs subdirectories from user input, classify as MANUAL (more complex validation needed)
+
+### `js/code-injection`
+**Problem**: User input passed to `eval()`, `Function()`, `setTimeout(string)`, or `vm.runInNewContext()`.
+**Risk**: Attacker can execute arbitrary JavaScript in the server context.
+
+**Fix pattern**:
+```javascript
+// BEFORE (vulnerable)
+eval(userExpression);
+new Function("return " + userInput)();
+setTimeout(userCode, 1000);
+
+// AFTER (safe alternatives depend on use case)
+// For JSON parsing: use JSON.parse()
+JSON.parse(userInput);
+// For math expressions: use a safe expression parser like expr-eval
+const { Parser } = require("expr-eval");
+new Parser().evaluate(userExpression);
+// For setTimeout: use function reference
+setTimeout(() => { /* safe logic */ }, 1000);
+```
+
+**Steps**:
+1. Read context to understand what the eval/Function is doing
+2. If parsing JSON: replace with `JSON.parse()`
+3. If evaluating math: add `expr-eval` dependency and use its parser
+4. If evaluating user-defined logic: classify as MANUAL (requires architectural redesign)
+5. For `setTimeout`/`setInterval` with string args: convert to arrow function
+
+### `go/sql-injection`
+**Problem**: SQL queries built with `fmt.Sprintf` or string concatenation.
+**Risk**: Attacker can inject arbitrary SQL.
+
+**Fix pattern**:
+```go
+// BEFORE (vulnerable)
+query := fmt.Sprintf("SELECT * FROM users WHERE id = '%s'", userID)
+db.Query(query)
+
+// AFTER (parameterized)
+db.Query("SELECT * FROM users WHERE id = $1", userID) // PostgreSQL
+db.Query("SELECT * FROM users WHERE id = ?", userID)  // MySQL
+```
+
+**Steps**:
+1. Read the full function containing the flagged line
+2. Identify the database driver (lib/pq for Postgres, go-sql-driver/mysql, mattn/go-sqlite3)
+3. Replace `fmt.Sprintf` query building with parameterized queries
+4. For PostgreSQL: use `$1, $2` positional params
+5. For MySQL/SQLite: use `?` positional params
+6. If using an ORM (GORM, sqlx): use the ORM's parameterized methods
+
+### `go/path-injection`
+**Problem**: User input used in file paths without validation.
+**Risk**: Directory traversal to read/write arbitrary files.
+
+**Fix pattern**:
+```go
+// BEFORE (vulnerable)
+filePath := filepath.Join(baseDir, userInput)
+data, err := os.ReadFile(filePath)
+
+// AFTER (validated)
+filePath := filepath.Join(baseDir, filepath.Base(userInput))
+absPath, err := filepath.Abs(filePath)
+if err != nil || !strings.HasPrefix(absPath, filepath.Clean(baseDir)) {
+    return fmt.Errorf("invalid path")
+}
+data, err := os.ReadFile(absPath)
+```
+
+**Steps**:
+1. Add `filepath.Base()` to strip directory components from user input
+2. Resolve to absolute path and verify it stays under the base directory
+3. Add `strings` import if not present
+4. If the code needs subdirectories from user input, classify as MANUAL
+
+### `go/command-injection`
+**Problem**: User input passed to `exec.Command` with shell invocation.
+**Risk**: Attacker can inject OS commands.
+
+**Fix pattern**:
+```go
+// BEFORE (vulnerable)
+cmd := exec.Command("sh", "-c", "git clone " + repoURL)
+
+// AFTER (list args, no shell)
+cmd := exec.Command("git", "clone", repoURL)
+```
+
+**Steps**:
+1. Read the full function to understand the command
+2. Replace `sh -c` invocations with direct command + argument list
+3. If the command genuinely needs shell features (pipes, globbing), classify as MANUAL
+
 ## Remediation Process
 
 ### 1. Read context

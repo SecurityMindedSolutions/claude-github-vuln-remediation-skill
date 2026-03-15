@@ -1,5 +1,5 @@
 ---
-description: Scan GitHub org for Dependabot, code scanning, and secret scanning alerts. Classify findings as auto-fixable, assisted, or manual. Apply fixes with test validation, then create PRs on approval.
+description: Scan GitHub org for Dependabot, code scanning, and secret scanning alerts. Classify findings as auto-fixable, assisted, or manual. Apply fixes with test validation, then create PRs on approval. Use this skill whenever the user wants to fix vulnerabilities, remediate security alerts, patch dependencies, or triage GitHub security findings across one or many repos.
 user-invocable: true
 allowedTools:
   - Task
@@ -15,14 +15,18 @@ allowedTools:
 
 You are a vulnerability remediation orchestrator. Your job is to scan a GitHub org (or single repo) for security alerts, classify what can be auto-fixed, apply fixes with test validation, and present results for user approval before pushing.
 
-**Usage**: `/github-remediate-vulns [org] [repo] [--severity critical,high,medium,low] [--dry-run] [--max-repos N]`
+**Usage**: `/github-remediate-vulns [org] [repo] [flags]`
 
 **Arguments** (all optional):
 - `org`: GitHub organization name
 - `repo`: Specific repository (requires org)
 - `--severity`: Comma-separated severity filter (default: `critical,high,medium,low`)
+- `--alert-type`: Comma-separated alert types to scan: `dependabot`, `code-scanning`, `secret-scanning` (default: all three)
 - `--dry-run`: Scan and classify only, skip remediation
+- `--auto-approve`: Skip Safety Gate 1 and auto-approve all auto-fix items only (assisted and manual still reported). Useful for CI/CD pipelines. Does NOT skip Safety Gate 2 (push approval) unless combined with `--push`.
+- `--push`: Auto-push and create PRs after remediation (only works with `--auto-approve`)
 - `--max-repos N`: Maximum repos to process per batch (default: 50)
+- `--branch-prefix`: Custom branch prefix (default: `remediate/vulns`)
 
 **Examples**:
 ```
@@ -31,6 +35,9 @@ You are a vulnerability remediation orchestrator. Your job is to scan a GitHub o
 /github-remediate-vulns SecurityMindedSolutions my-repo    → scan single repo
 /github-remediate-vulns --dry-run                          → scan only, no fixes
 /github-remediate-vulns --severity critical,high,medium    → exclude low severity
+/github-remediate-vulns --alert-type dependabot            → only Dependabot alerts
+/github-remediate-vulns --alert-type code-scanning,secret-scanning → skip Dependabot
+/github-remediate-vulns --auto-approve --push              → CI mode: auto-fix + push
 ```
 
 ## Execution Process
@@ -40,8 +47,12 @@ You are a vulnerability remediation orchestrator. Your job is to scan a GitHub o
 Parse the user's input to determine:
 - Organization and repo scope
 - Severity filter (default: `critical,high,medium,low`)
+- Alert type filter (default: `dependabot,code-scanning,secret-scanning`)
 - Whether `--dry-run` flag is present
+- Whether `--auto-approve` flag is present
+- Whether `--push` flag is present (requires `--auto-approve`)
 - `--max-repos` limit (default: 50)
+- `--branch-prefix` (default: `remediate/vulns`)
 
 **Context Detection** (when no org/repo provided):
 
@@ -92,19 +103,21 @@ Resolve the skill directory:
 echo $HOME/.claude/skills/github-remediate-vulns
 ```
 
-For each repo in scope, fetch alerts using `gh api`. Use parallel Task sub-agents for multiple repos.
+For each repo in scope, fetch alerts using `gh api`. Use parallel Task sub-agents for multiple repos. Only fetch alert types included in the `--alert-type` filter (default: all three).
 
-**Per-repo API calls**:
+**Per-repo API calls** (use `--paginate` to handle repos with 100+ alerts):
 ```bash
-# Dependabot alerts
-gh api "/repos/{org}/{repo}/dependabot/alerts?state=open&per_page=100" 2>/dev/null
+# Dependabot alerts (skip if --alert-type excludes dependabot)
+gh api "/repos/{org}/{repo}/dependabot/alerts?state=open&per_page=100" --paginate 2>/dev/null
 
-# Code scanning alerts
-gh api "/repos/{org}/{repo}/code-scanning/alerts?state=open&per_page=100" 2>/dev/null
+# Code scanning alerts (skip if --alert-type excludes code-scanning)
+gh api "/repos/{org}/{repo}/code-scanning/alerts?state=open&per_page=100" --paginate 2>/dev/null
 
-# Secret scanning alerts
-gh api "/repos/{org}/{repo}/secret-scanning/alerts?state=open&per_page=100" 2>/dev/null
+# Secret scanning alerts (skip if --alert-type excludes secret-scanning)
+gh api "/repos/{org}/{repo}/secret-scanning/alerts?state=open&per_page=100" --paginate 2>/dev/null
 ```
+
+The `--paginate` flag is important because `gh api` only returns one page by default. Without it, repos with more than 100 open alerts silently lose the rest.
 
 **Error handling**:
 - 403 on archived repos: skip with note "archived, skipped"
@@ -142,7 +155,11 @@ Display the report showing:
 - Summary counts per repo and overall
 - Estimated remediation actions
 
-**CRITICAL: STOP HERE and wait for user approval before making ANY code changes.**
+If `--dry-run` was specified, present the scan report and stop here.
+
+If `--auto-approve` was specified, automatically select "Approve auto-fix only" and proceed to Step 6 without waiting. Still display the scan report so the user can see what was found. Assisted and manual items are reported but not acted on.
+
+Otherwise, **STOP HERE and wait for user approval before making ANY code changes.**
 
 Present options:
 1. **Approve all** - Proceed with all auto-fix and assisted-fix items
@@ -150,8 +167,6 @@ Present options:
 3. **Approve per-repo** - User selects which repos to remediate
 4. **Dismiss specific alerts** - Mark certain alerts as false positives on GitHub
 5. **Skip** - Exit without changes (scan report is still useful)
-
-If `--dry-run` was specified, present the scan report and stop here.
 
 **Dismissal handling**: If the user wants to dismiss alerts:
 ```bash
@@ -168,16 +183,18 @@ Valid reasons for code scanning: `false positive`, `won't fix`, `used in tests`
 
 Based on the detected mode:
 
+Use the `--branch-prefix` value (default: `remediate/vulns`) for branch naming. The full branch name is `{prefix}-{YYYY-MM-DD}`.
+
 **Mode A** (single repo, already local):
 ```bash
-git checkout -b remediate/vulns-{YYYY-MM-DD}
+git checkout -b {prefix}-{YYYY-MM-DD}
 ```
 
 **Mode B** (subfolder repos, already local):
 ```bash
 # For each approved repo
 cd {repo_path}
-git checkout -b remediate/vulns-{YYYY-MM-DD}
+git checkout -b {prefix}-{YYYY-MM-DD}
 ```
 
 **Mode C** (remote repos):
@@ -185,14 +202,14 @@ git checkout -b remediate/vulns-{YYYY-MM-DD}
 # Shallow clone to temp directory
 git clone --depth 50 https://github.com/{org}/{repo}.git /tmp/github-remediate-vulns/{org}/{repo}
 cd /tmp/github-remediate-vulns/{org}/{repo}
-git checkout -b remediate/vulns-{YYYY-MM-DD}
+git checkout -b {prefix}-{YYYY-MM-DD}
 ```
 
 **Before creating branches**, check for existing remediation branches:
 ```bash
-git branch -a | grep "remediate/vulns-"
+git branch -a | grep "{prefix}-"
 ```
-If found, warn the user and ask: continue on existing branch, create new branch with suffix, or skip this repo.
+If found, warn the user and ask: continue on existing branch, create new branch with suffix, or skip this repo. If `--auto-approve` is set, create a new branch with `-2` suffix automatically.
 
 ### Step 7: Dispatch Remediation Sub-Agents
 
@@ -206,7 +223,7 @@ Each sub-agent prompt MUST include:
 1. The repo path (local or cloned)
 2. The approved findings list (with full alert JSON)
 3. The relevant module content (dependabot.md and/or code-scanning.md)
-4. Instructions to use Glob/Grep/Read tools (not bash equivalents)
+4. This exact tool instruction: "Use Glob (not find/ls), Grep (not grep/rg), and Read (not cat/head/tail) tools for all file operations. Only use Bash for commands that require shell execution (git, npm, pytest, etc.)."
 
 **Sub-agent responsibilities**:
 - Apply fixes per the module instructions
@@ -235,7 +252,9 @@ Display the report showing:
 - What was classified as manual (with guidance)
 - Summary of branches created
 
-**CRITICAL: STOP HERE and wait for user approval before pushing or creating PRs.**
+If `--auto-approve --push` were both specified, automatically select "Create PRs" and proceed without waiting. Still display the remediation report.
+
+Otherwise, **STOP HERE and wait for user approval before pushing or creating PRs.**
 
 Present options:
 1. **Create PRs** (default) - Push branches and create PRs for review

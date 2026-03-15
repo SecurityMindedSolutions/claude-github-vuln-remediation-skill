@@ -88,9 +88,8 @@ Parse the alert JSON for:
 After updating the manifest, regenerate lock files:
 
 ```bash
-# npm
-npm install --package-lock-only  # updates lock without node_modules
-# OR if node_modules needed for tests:
+# npm - prefer full install since tests usually need node_modules
+# npm install --package-lock-only can fail if node_modules doesn't exist
 npm install
 
 # yarn

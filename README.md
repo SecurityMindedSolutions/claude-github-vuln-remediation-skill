@@ -38,8 +38,14 @@ The skill stops and asks for approval at two points:
 - `py/incomplete-url-substring-sanitization` - URL parsing fix
 - `py/weak-sensitive-data-hashing` - SHA-256/bcrypt upgrade
 - `py/sql-injection` - parameterized queries
-- `js/xss` - output encoding / DOMPurify
 - `py/command-injection` - subprocess with list args
+- `js/xss` - output encoding / DOMPurify
+- `js/sql-injection` - parameterized queries (pg, mysql2, knex, prisma)
+- `js/path-injection` - path traversal guard
+- `js/code-injection` - eval/Function removal
+- `go/sql-injection` - parameterized queries
+- `go/path-injection` - filepath.Base + resolve guard
+- `go/command-injection` - direct exec without shell
 
 ### Secret Scanning
 - Report-only with provider-specific rotation checklists
@@ -104,6 +110,12 @@ Inside any Claude Code session:
 
 # Filter by severity (default: all severities)
 /github-remediate-vulns --severity critical,high
+
+# Only scan Dependabot alerts (skip code scanning and secrets)
+/github-remediate-vulns --alert-type dependabot
+
+# CI mode - auto-fix safe items, create PRs, no prompts
+/github-remediate-vulns --auto-approve --push
 ```
 
 ### Context Detection
@@ -121,8 +133,12 @@ The skill auto-detects how to run based on where you invoke it:
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--severity` | `critical,high,medium,low` | Comma-separated severity filter |
+| `--alert-type` | `dependabot,code-scanning,secret-scanning` | Which alert types to scan |
 | `--dry-run` | false | Scan and classify only, no fixes |
+| `--auto-approve` | false | Skip approval gate 1, auto-fix safe items only |
+| `--push` | false | Auto-push and create PRs (requires `--auto-approve`) |
 | `--max-repos` | 50 | Maximum repos per batch |
+| `--branch-prefix` | `remediate/vulns` | Custom branch name prefix |
 
 ## How It Works
 
