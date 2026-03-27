@@ -119,6 +119,31 @@ gh api "/repos/{org}/{repo}/secret-scanning/alerts?state=open&per_page=100" --pa
 
 The `--paginate` flag is important because `gh api` only returns one page by default. Without it, repos with more than 100 open alerts silently lose the rest.
 
+**GitHub API quirk - missing alerts**: The Dependabot list endpoint sometimes silently omits open alerts (observed with packages that have multiple related advisories, e.g. two CVEs for the same package). These alerts show as "open" when fetched individually but never appear in the list response. To catch them, cross-reference the API results with the local package manager audit:
+
+```bash
+# npm/Node.js repos - run in the repo directory
+npm audit --json 2>/dev/null | jq -r '.vulnerabilities | to_entries[] | "\(.key) \(.value.severity)"'
+
+# Python repos
+pip-audit --format json 2>/dev/null | jq -r '.[] | "\(.name) \(.vulns[].id)"'
+```
+
+Compare audit output against the GitHub API results. Any package flagged by the local audit but missing from the API list should be looked up individually:
+
+```bash
+# Look up alerts for a specific package by name
+gh api "/repos/{org}/{repo}/dependabot/alerts?state=open&per_page=100" --paginate \
+  --jq '.[] | select(.dependency.package.name == "{package_name}") | {number, state, pkg: .dependency.package.name}'
+
+# If still missing, fetch recent alert numbers by scanning the last 20
+for i in $(seq 1 20); do
+  gh api "/repos/{org}/{repo}/dependabot/alerts/$i" --jq '{number, state, pkg: .dependency.package.name}' 2>/dev/null
+done
+```
+
+Include any alerts found this way in the scan report with a note: `(found via local audit - missing from GitHub API list)`.
+
 **Error handling**:
 - 403 on archived repos: skip with note "archived, skipped"
 - 403 on specific endpoint: skip that scan type, note "{scan_type} not enabled"
